@@ -31,19 +31,27 @@
 #define fx 20
 #define fy 20
 
+using ceres::AutoDiffCostFunction;
+using ceres::CostFunction;
+using ceres::LossFunction;
+using ceres::Problem;
+using ceres::Solve;
+using ceres::Solver;
+
+using namespace cv;
+
 static const std::string OPENCV_WINDOW = "Depth Image";
 
-// Subscribe to ros image, convert to OpenCV image, and process
 class ImageConverter
 {
-    ros::NodeHandle nh_;
+
     image_transport::ImageTransport it_;
     image_transport::Subscriber image_sub_;
 
 public:
     cv_bridge::CvImagePtr cv_ptr;
 
-    ImageConverter() : it_(nh_)
+    ImageConverter(ros::NodeHandle nh_) : it_(nh_)
     {
         image_sub_ = it_.subscribe("/camera/image_raw", 1, &ImageConverter::imageCb, this);
         cv::namedWindow(OPENCV_WINDOW);
@@ -60,7 +68,7 @@ public:
 
         try
         {
-            this.cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::MONO8);
+            cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::MONO8);
         }
         catch (cv_bridge::Exception &e)
         {
@@ -76,34 +84,35 @@ public:
 
 class PointCloudConverter
 {
-    ros::NodeHandle nh_;
     ros::Subscriber sub_;
+    ros::NodeHandle it_;
 
 public:
     pcl::PointCloud<pcl::PointXYZI>::ConstPtr point_cloud;
-    PointCloudConverter() : it_(nh_)
+    PointCloudConverter(ros::NodeHandle nh_) : it_(nh_)
     {
-        sub = it_.subscribe<pcl::PointCloud<pcl::PointXYZI>>("/pointcloud_topic", 1, &PointCloudConverter::callback);
+        sub_ = it_.subscribe<pcl::PointCloud<pcl::PointXYZI>>("/pointcloud_topic", 1, &PointCloudConverter::callback);
     }
 
     // Convert and process image
     void callback(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &msg)
     {
-        this.point_cloud = msg;
+        point_cloud = msg;
     }
 };
 
 class TrackingConverter
 {
     ros::NodeHandle nh_;
-    ros::Subscriber sub_;
-    tf::TransformListener listener_;
+    //ros::Subscriber sub_;
+    //tf::TransformListener listener_;
 
 public:
     tf2_ros::Buffer tfBuffer;
     tf2_ros::TransformListener tfListener(tfBuffer);
+    Eigen::Affine3d tksi;
 
-    ros::Rate rate(10.0);
+    //ros::Rate rate(10.0);
     while (nh_.ok())
     {
         geometry_msgs::TransformStamped transformStamped;
@@ -119,18 +128,18 @@ public:
         }
 
         // Convert transformStamped to Eigen
-        doTransform(const tf2::Stamped<Eigen::Isometry3d> &t_in, tf2::Stamped<Eigen::Isometry3d> &t_out, const geometry_msgs::TransformStamped &transform)
-            tf2::Stamped<Eigen::Isometry3d>
+        tksi = tf2::transformToEigen(transformStamped);
 
-                rate.sleep();
+        //rate.sleep();
     }
 };
 
 void ComputeDepthIntoProjectionAndJacobian(Eigen::Matrix<double, 4, 1> transformed_point, Eigen::Matrix<double, 4, 1> current_point, double *value, Eigen::Matrix<double, 1, 4> *jacobian)
 {
-    ImageConverter ic;
+    ros::NodeHandle nh_; //wrong
+    ImageConverter ic(nh_);
     Mat depth_image = ic.cv_ptr->image.clone();
-    *value = depth_image.at<uchar>(f * transformed_point(0, 0) / transformed_point(2, 0), f * transformed_point(1, 0) / transformed_point(2, 0));
+    *value = depth_image.at<uchar>(fx / transformed_point(2, 0), fy / transformed_point(2, 0));
 
     //access depth image
     Mat depth_gradient(depth_image.rows, depth_image.cols, CV_8UC3, Scalar(0, 0, 0));
@@ -188,8 +197,7 @@ struct Affine2DWithDistortion
         x_ = x_in;
         y_ = y_in;
         z_ = z_in;
-        compute_residual.reset(
-            new ceres::CostFunctionToFunctor<1, 1, 1>(new ComputeResidualFunction));
+        compute_residual.reset(new ceres::CostFunctionToFunctor<1, 1, 1>(new ComputeResidualFunction));
     }
 
     template <typename T>
@@ -206,24 +214,24 @@ struct Affine2DWithDistortion
         Eigen::Matrix<T, 4, 1> transformed_point;
         Eigen::Matrix<T, 4, 1> current_point;
 
-        const T tcm(0, 0) = cos(yaw[0]) * cos(pitch[0]);
-        const T tcm(0, 1) = cos(yaw[0]) * sin(pitch[0]) * sin(roll[0]) - sin(yaw[0]) * cos(roll[0]);
-        const T tcm(0, 2) = cos(yaw[0]) * sin(pitch[0]) * cos(roll[0]) + sin(yaw[0]) * sin(roll[0]);
-        const T tcm(1, 0) = sin(yaw[0]) * cos(pitch[0]);
-        const T tcm(1, 1) = sin(yaw[0]) * sin(pitch[0]) * sin(roll[0]) + cos(yaw[0]) * cos(roll[0]);
-        const T tcm(1, 2) = sin(yaw[0]) * sin(pitch[0]) * cos(roll[0]) - cos(yaw[0]) * sin(roll[0]);
-        const T tcm(2, 0) = -1 * sin(pitch[0]);
-        const T tcm(2, 1) = cos(pitch[0]) * sin(roll[0]);
-        const T tcm(2, 2) = cos(pitch[0]) * cos(roll[0]);
+        tcm(0, 0) = cos(yaw[0]) * cos(pitch[0]);
+        tcm(0, 1) = cos(yaw[0]) * sin(pitch[0]) * sin(roll[0]) - sin(yaw[0]) * cos(roll[0]);
+        tcm(0, 2) = cos(yaw[0]) * sin(pitch[0]) * cos(roll[0]) + sin(yaw[0]) * sin(roll[0]);
+        tcm(1, 0) = sin(yaw[0]) * cos(pitch[0]);
+        tcm(1, 1) = sin(yaw[0]) * sin(pitch[0]) * sin(roll[0]) + cos(yaw[0]) * cos(roll[0]);
+        tcm(1, 2) = sin(yaw[0]) * sin(pitch[0]) * cos(roll[0]) - cos(yaw[0]) * sin(roll[0]);
+        tcm(2, 0) = -sin(pitch[0]);
+        tcm(2, 1) = cos(pitch[0]) * sin(roll[0]);
+        tcm(2, 2) = cos(pitch[0]) * cos(roll[0]);
 
-        const T tcm(0, 3) = tx[0];
-        const T tcm(1, 3) = ty[0];
-        const T tcm(2, 3) = tz[0];
+        tcm(0, 3) = tx[0];
+        tcm(1, 3) = ty[0];
+        tcm(2, 3) = tz[0];
 
-        const T tcm(3, 0) = T(0.0);
-        const T tcm(3, 1) = T(0.0);
-        const T tcm(3, 2) = T(0.0);
-        const T tcm(3, 3) = T(1.0);
+        tcm(3, 0) = T(0.0);
+        tcm(3, 1) = T(0.0);
+        tcm(3, 2) = T(0.0);
+        tcm(3, 3) = T(1.0);
 
         //remember to convert tksi to eigen
 
@@ -234,7 +242,9 @@ struct Affine2DWithDistortion
         current_point(2, 0) = T(z_);
         current_point(3, 0) = T(1.0);
 
-        transformed_point = tksi * tcm * current_point;
+        ros::NodeHandle nh_; //wrong
+        TrackingConverter tc(nh_);
+        transformed_point = tc.tksi * tcm * current_point;
 
         double d_pi;
         (*compute_residual)(&transformed_point, &current_point, &d_pi);
@@ -252,14 +262,14 @@ struct Affine2DWithDistortion
     double z_;
     std::unique_ptr<ceres::CostFunctionToFunctor<1, 1, 1>> compute_residual;
 };
-
 int main(int argc, char **argv)
 {
     google::InitGoogleLogging(argv[0]);
 
     ros::init(argc, argv, "loc");
 
-    PointCloudConverter pcc;
+    ros::NodeHandle nh_;
+    PointCloudConverter pcc(nh_);
     pcl::PointCloud<pcl::PointXYZI>::ConstPtr pointcloud = pcc.point_cloud;
     double yaw = 0.0;
     double pitch = 0.0;
@@ -273,7 +283,7 @@ int main(int argc, char **argv)
     //access pointcloud here
     for (int i = 0; i < pointcloud->points.size(); i++)
     {
-        CostFunction *cost_function = new AutoDiffCostFunction<calculateResidual, 1, 1, 1, 1, 1, 1, 1>(new calculateResidual(pointcloud->points[i].x, pointcloud->points[i].y, pointcloud->points[i].z));
+        CostFunction *cost_function = new AutoDiffCostFunction<Affine2DWithDistortion, 1, 1, 1, 1, 1, 1, 1>(new Affine2DWithDistortion(pointcloud->points[i].x, pointcloud->points[i].y, pointcloud->points[i].z));
         problem.AddResidualBlock(cost_function, NULL, &yaw, &pitch, &roll, &tx, &ty, &tz);
     }
 
