@@ -182,11 +182,12 @@ void ComputeDepthIntoProjectionAndJacobian(Eigen::Matrix<double, 4, 1> transform
 class ComputeResidualFunction : public ceres::SizedCostFunction<1, 1>
 {
 public:
-    virtual bool Evaluate(Eigen::Matrix<double, 4, 1> *transformed_point, Eigen::Matrix<double, 4, 1> *current_point, double *residuals, Eigen::Matrix<double, 1, 4> **jacobians) const
-    {
-        ComputeDepthIntoProjectionAndJacobian(transformed_point[0], current_point[0], residuals, jacobians[0]);
-        return true;
-    }
+    ComputeResidualFunction();
+    virtual bool Evaluate(Eigen::Matrix<double, 4, 1> *transformed_point, Eigen::Matrix<double, 4, 1> *current_point, double *residuals, Eigen::Matrix<double, 1, 4> **jacobians) const;
+    // {
+    //     ComputeDepthIntoProjectionAndJacobian(transformed_point[0], current_point[0], residuals, jacobians[0]);
+    //     return true;
+    // }
 };
 
 // This returns the residual
