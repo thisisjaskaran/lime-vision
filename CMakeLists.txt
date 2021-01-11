@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.0.2)
 project(loc)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
-add_compile_options(-std=c++11)
+add_compile_options(-std=c++14)
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
@@ -11,6 +11,14 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
+
+  image_transport
+  sensor_msgs
+  geometry_msgs
+  nav_msgs
+  tf2
+  tf2_ros
+  cv_bridge
   #cmake_modules
 )	
 find_package(OpenCV 3)
@@ -122,7 +130,7 @@ catkin_package(
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 
-add_executable( loc src/loc.cpp )
+add_executable( loc src/loc1.cpp )
 
 include_directories(
 # include
@@ -133,7 +141,7 @@ include_directories(
   ${Eigen3_INCLUDE_DIRS}
 )
 
-target_link_libraries(loc ${OpenCV_LIBRARIES} ${CERES_LIBRARIES} ${PCL_LIBRARIES})
+target_link_libraries(loc ${OpenCV_LIBRARIES} ${CERES_LIBRARIES} ${PCL_LIBRARIES} ${catkin_LIBRARIES})
 
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}

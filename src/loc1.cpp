@@ -95,51 +95,66 @@ class PointCloudConverter
     ros::NodeHandle it_;
 
 public:
-    pcl::PointCloud<pcl::PointXYZI>::ConstPtr point_cloud;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr point_cloud;
     PointCloudConverter(ros::NodeHandle nh_) : it_(nh_)
     {
-        sub_ = it_.subscribe<pcl::PointCloud<pcl::PointXYZI>>("/pointcloud_topic", 1, &PointCloudConverter::callback);
+        //sub_ = it_.subscribe<pcl::PointCloud<pcl::PointXYZI>>("/pointcloud_topic", 1, &PointCloudConverter::callback);
+        sub_ = it_.subscribe<sensor_msgs::PointCloud2>("/pointcloud_topic", 1, &PointCloudConverter::callback, this);
     }
 
     // Convert and process image
-    void callback(const pcl::PointCloud<pcl::PointXYZI>::ConstPtr &msg)
+    void callback(const sensor_msgs::PointCloud2ConstPtr &msg)
     {
-        point_cloud = msg;
+        pcl::fromROSMsg(*msg, *point_cloud);
     }
 };
 
 class TrackingConverter
 {
-    ros::NodeHandle nh_;
+    ros::NodeHandle node_;
     //ros::Subscriber sub_;
     //tf::TransformListener listener_;
 
 public:
     tf2_ros::Buffer tfBuffer;
-    tf2_ros::TransformListener tfListener(tfBuffer);
-    Eigen::Affine3d tksi;
+    tf2_ros::TransformListener *tfListener;//(tfBuffer);
+    //Eigen::Affine3d tksi;
+    geometry_msgs::TransformStamped transformStamped;
+
+    TrackingConverter(ros::NodeHandle nh_) : node_(nh_)
+    {
+        tfListener = new tf2_ros::TransformListener(tfBuffer);
+    }
 
     //ros::Rate rate(10.0);
-    while (nh_.ok())
+    //while (nh_.ok())
+    bool startTrackingConverter()
     {
-        geometry_msgs::TransformStamped transformStamped;
+        //geometry_msgs::TransformStamped transformStamped;
         try
         {
             transformStamped = tfBuffer.lookupTransform("target_frame", "source_frame", ros::Time(0));
+            //tksi = tf2::transformToEigen(transformStamped);
+
+            return true;
         }
         catch (tf2::TransformException &ex)
         {
             ROS_WARN("%s", ex.what());
             ros::Duration(1.0).sleep();
-            continue;
+            //continue;
+
+            return false;
         }
 
         // Convert transformStamped to Eigen
-        tksi = tf2::transformToEigen(transformStamped);
+        // tksi = tf2::transformToEigen(transformStamped);
 
         //rate.sleep();
     }
 };
+
+ImageConverter *ic;
 
 class Rat43Analytic : public ceres::SizedCostFunction<1, 6>
 {
@@ -217,6 +232,8 @@ public:
 
         Eigen::Matrix<double, 4, 1> transformed_point = tksi * tcm * pi;
 
+        Mat depth_image = ic->cv_ptr->image.clone();
+
         residuals[0] = transformed_point(2, 0) - depth_image.at<uchar>(fx / transformed_point(2, 0), fy / transformed_point(2, 0));
 
         if (!jacobians)
@@ -293,35 +310,55 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "loc");
 
     ros::NodeHandle nh_;
+    
     PointCloudConverter pcc(nh_);
-    pcl::PointCloud<pcl::PointXYZI>::ConstPtr pointcloud = pcc.point_cloud;
-    double yaw = 0.0;
-    double pitch = 0.0;
-    double roll = 0.0;
-    double tx = 0.0;
-    double ty = 0.0;
-    double tz = 0.0;
+    ic = new ImageConverter(nh_);
+    TrackingConverter tc(nh_);
 
-    Problem problem;
+    ros::Rate rate(200);
 
-    //access pointcloud here
-    for (int i = 0; i < pointcloud->points.size(); i++)
+    while(ros::ok())
     {
-        CostFunction *cost_function = new Rat43Analytic(pointcloud->points[i].x, pointcloud->points[i].y, pointcloud->points[i].z);
-        problem.AddResidualBlock(cost_function, NULL, &yaw, &pitch, &roll, &tx, &ty, &tz);
+        ros::spinOnce();
+
+        if(!tc.startTrackingConverter())
+            continue;
+
+        geometry_msgs::TransformStamped initial_tksi = tc.transformStamped;
+
+        pcl::PointCloud<pcl::PointXYZI>::ConstPtr pointcloud = pcc.point_cloud;
+        double yaw = 0.0;
+        double pitch = 0.0;
+        double roll = 0.0;
+        double tx = initial_tksi.transform.translation.x;
+        double ty = initial_tksi.transform.translation.y;
+        double tz = initial_tksi.transform.translation.z;
+
+        tf::Matrix3x3(tf::Quaternion(initial_tksi.transform.rotation.x, initial_tksi.transform.rotation.y, initial_tksi.transform.rotation.z, initial_tksi.transform.rotation.w)).getRPY(roll, pitch, yaw);
+
+        Problem problem;
+
+        //access pointcloud here
+        for (int i = 0; i < pointcloud->points.size(); i++)
+        {
+            CostFunction *cost_function = new Rat43Analytic(pointcloud->points[i].x, pointcloud->points[i].y, pointcloud->points[i].z);
+            problem.AddResidualBlock(cost_function, NULL, &yaw, &pitch, &roll, &tx, &ty, &tz);
+        }
+
+        Solver::Options options;
+        options.max_num_iterations = 25;
+        options.linear_solver_type = ceres::DENSE_QR;
+        options.minimizer_progress_to_stdout = true;
+
+        Solver::Summary summary;
+        Solve(options, &problem, &summary);
+        std::cout << summary.BriefReport() << "\n";
+        std::cout << "yaw : " << yaw << " pitch : " << pitch << "roll : " << roll << "\n";
+        std::cout << "tx : " << tx << " ty : " << ty << "tz : " << tz << "\n";
+
+        //ros::spin();
+        rate.sleep();
     }
 
-    Solver::Options options;
-    options.max_num_iterations = 25;
-    options.linear_solver_type = ceres::DENSE_QR;
-    options.minimizer_progress_to_stdout = true;
-
-    Solver::Summary summary;
-    Solve(options, &problem, &summary);
-    std::cout << summary.BriefReport() << "\n";
-    std::cout << "yaw : " << yaw << " pitch : " << pitch << "roll : " << roll << "\n";
-    std::cout << "tx : " << tx << " ty : " << ty << "tz : " << tz << "\n";
-
-    ros::spin();
     return 0;
 }
