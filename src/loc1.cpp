@@ -28,15 +28,15 @@
 #include <eigen3/Eigen/Dense>
 #include <sstream>
 
-#define fx 20
-#define fy 20
+#define fx 20.0
+#define fy 20.0
 
-#define yaw0 1
-#define pitch0 1
-#define roll0 1
-#define tx0 1
-#define ty0 1
-#define tz0 1
+#define yaw0 0.0
+#define pitch0 0.0
+#define roll0 0.0
+#define tx0 0.0
+#define ty0 0.0
+#define tz0 0.0
 
 using ceres::AutoDiffCostFunction;
 using ceres::CostFunction;
@@ -53,14 +53,20 @@ class ImageConverter
 {
 
     image_transport::ImageTransport it_;
-    image_transport::Subscriber image_sub_;
+    image_transport::Subscriber image_sub_right;
+    image_transport::Subscriber image_sub_left;
 
 public:
-    cv_bridge::CvImagePtr cv_ptr;
+    bool rightFound=false,leftFound=false;
+    Mat depth_image;
+    cv_bridge::CvImagePtr cv_ptr_right;
+    cv_bridge::CvImagePtr cv_ptr_left;
+    ros::Time timeStamp;
 
     ImageConverter(ros::NodeHandle nh_) : it_(nh_)
     {
-        image_sub_ = it_.subscribe("/camera/image_raw", 1, &ImageConverter::imageCb, this);
+        image_sub_right = it_.subscribe("/camera/image_right", 1, &ImageConverter::imageCbRight, this);
+        image_sub_left = it_.subscribe("/camera/image_right", 1, &ImageConverter::imageCbLeft, this);
         cv::namedWindow(OPENCV_WINDOW);
     }
 
@@ -70,12 +76,13 @@ public:
     }
 
     // Convert and process image
-    void imageCb(const sensor_msgs::ImageConstPtr &msg)
+    void imageCbRight(const sensor_msgs::ImageConstPtr &msg)
     {
-
         try
         {
-            cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::MONO8);
+            cv_ptr_right = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGB8);
+            rightFound=true;
+            timeStamp=msg->header.stamp;
         }
         catch (cv_bridge::Exception &e)
         {
@@ -84,8 +91,26 @@ public:
         }
 
         // Display image
-        cv::imshow(OPENCV_WINDOW, cv_ptr->image);
-        cv::waitKey(3);
+        // cv::imshow(OPENCV_WINDOW, cv_ptr_right->image);
+        // cv::waitKey(3);
+    }
+    void imageCbLeft(const sensor_msgs::ImageConstPtr &msg)
+    {
+        try
+        {
+            cv_ptr_left = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGB8);
+            leftFound=true;
+            timeStamp=msg->header.stamp;
+        }
+        catch (cv_bridge::Exception &e)
+        {
+            ROS_ERROR("cv_bridge exception: %s", e.what());
+            return;
+        }
+
+        // Display image
+        // cv::imshow(OPENCV_WINDOW, cv_ptr_left->image);
+        // cv::waitKey(3);
     }
 };
 
@@ -232,7 +257,7 @@ public:
 
         Eigen::Matrix<double, 4, 1> transformed_point = tksi * tcm * pi;
 
-        Mat depth_image = ic->cv_ptr->image.clone();
+        Mat depth_image = ic->depth_image;
 
         residuals[0] = transformed_point(2, 0) - depth_image.at<uchar>(fx / transformed_point(2, 0), fy / transformed_point(2, 0));
 
@@ -315,16 +340,26 @@ int main(int argc, char **argv)
     ic = new ImageConverter(nh_);
     TrackingConverter tc(nh_);
 
+    tf::TransformBroadcaster tfBroadcaster;
+
     ros::Rate rate(200);
 
     while(ros::ok())
     {
-        ros::spinOnce();
-
         if(!tc.startTrackingConverter())
             continue;
+        
+        if(!ic->leftFound || !ic->rightFound){
+            continue;
+        }
+        ic->leftFound=false;
+        ic->rightFound=false;
 
         geometry_msgs::TransformStamped initial_tksi = tc.transformStamped;
+
+        // auto stereo=StereoBM::create(16,15);
+        Ptr<StereoBM> bm = StereoBM::create(16,9);
+        bm->compute(ic->cv_ptr_left->image.clone(),ic->cv_ptr_right->image.clone(),ic->depth_image);
 
         pcl::PointCloud<pcl::PointXYZI>::ConstPtr pointcloud = pcc.point_cloud;
         double yaw = 0.0;
@@ -356,7 +391,13 @@ int main(int argc, char **argv)
         std::cout << "yaw : " << yaw << " pitch : " << pitch << "roll : " << roll << "\n";
         std::cout << "tx : " << tx << " ty : " << ty << "tz : " << tz << "\n";
 
-        //ros::spin();
+        tf::Quaternion q=tf::Quaternion(yaw,pitch,roll);
+        tf::Vector3 t=tf::Vector3(tx,ty,tz);
+        tf::Transform finalTransform=tf::Transform(q,t);
+        tf::StampedTransform finalStampedTransform=tf::StampedTransform(finalTransform,ic->timeStamp,"/map","/car");
+        tfBroadcaster.sendTransform(finalStampedTransform);
+
+        ros::spinOnce();
         rate.sleep();
     }
 
