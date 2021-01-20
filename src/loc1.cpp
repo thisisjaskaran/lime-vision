@@ -38,6 +38,8 @@
 #define ty0 0.0
 #define tz0 0.0
 
+#define _surrounding_keyframe_search_radius 50.0
+
 using ceres::AutoDiffCostFunction;
 using ceres::CostFunction;
 using ceres::LossFunction;
@@ -116,22 +118,103 @@ public:
 
 class PointCloudConverter
 {
-    ros::Subscriber sub_;
-    ros::NodeHandle it_;
+    //ros::Subscriber sub_;
+    //ros::NodeHandle it_;
 
 public:
-    pcl::PointCloud<pcl::PointXYZI>::Ptr point_cloud;
-    PointCloudConverter(ros::NodeHandle nh_) : it_(nh_)
+    nanoflann::KdTreeFLANN<pcl::PointXYZI> kdtree_local;
+
+    vector<int> pointSearchIndLocal;
+    //vector<float> pointSearchSqDisPrev;
+
+    PointCloudConverter()//ros::NodeHandle nh_)// : it_(nh_)
     {
         //sub_ = it_.subscribe<pcl::PointCloud<pcl::PointXYZI>>("/pointcloud_topic", 1, &PointCloudConverter::callback);
-        sub_ = it_.subscribe<sensor_msgs::PointCloud2>("/pointcloud_topic", 1, &PointCloudConverter::callback, this);
+       // sub_ = it_.subscribe<sensor_msgs::PointCloud2>("/pointcloud_topic", 1, &PointCloudConverter::callback, this);
+
+        std::string cloudDir = "/tmp/dump/cloudKeyPoses3D.pcd";
+        pcl::PointCloud<pcl::PointXYZI>::Ptr tempCloud (new pcl::PointCloud<pcl::PointXYZI>);
+        pcl::io::loadPCDFile<pcl::PointXYZI> (cloudDir, *tempCloud);
+
+        kdtree_local.setInputCloud(tempCloud);
+    }
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr getCloud(int index)
+    {   
+        
+
+        pcl::PointCloud<pcl::PointXYZI>::Ptr tempCloud (new pcl::PointCloud<pcl::PointXYZI>);
+        pcl::PointCloud<pcl::PointXYZI>::Ptr inputCloud (new pcl::PointCloud<pcl::PointXYZI>);
+
+        std::string cloudDir = (boost::format("/tmp/dump/%06d/cloud_corner.pcd") % index).str();
+
+        pcl::io::loadPCDFile<pcl::PointXYZI> (cloudDir, *tempCloud);
+        (*inputCloud) += (*tempCloud);
+
+        cloudDir = (boost::format("/tmp/dump/%06d/cloud_surf.pcd") % index).str();
+
+        pcl::io::loadPCDFile<pcl::PointXYZI> (cloudDir, *tempCloud);
+        (*inputCloud) += (*tempCloud);
+
+        cloudDir = (boost::format("/tmp/dump/%06d/cloud_outlier.pcd") % index).str();
+
+        pcl::io::loadPCDFile<pcl::PointXYZI> (cloudDir, *tempCloud);
+        (*inputCloud) += (*tempCloud);
+
+        return inputCloud;
+    }
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr getlocalCloud(double roll, double pitch, double yaw, double tx, double ty, double tz)
+    {
+        pcl::PointCloud<pcl::PointXYZI>::Ptr point_cloud;
+        // point_cloud->clear();
+        pcl::PointXYZI currentRobotPosPoint;
+
+        currentRobotPosPoint.x = tx;
+        currentRobotPosPoint.y = ty;
+        currentRobotPosPoint.z = tz;
+
+        vector<int> pointSearchInd;
+        vector<float> pointSearchSqDis;
+
+        kdtreeSurroundingKeyPoses.radiusSearch(
+        currentRobotPosPoint, (double)_surrounding_keyframe_search_radius,
+        pointSearchInd, pointSearchSqDis);
+
+        for(int i=0; i<pointSearchInd.size(); i++)
+        {
+            auto it = find(pointSearchIndLocal.begin(), pointSearchIndLocal.end(), pointSearchInd[i]);
+
+            if( it == pointSearchIndLocal.end())
+            {
+                pointSearchIndLocal.push_back(pointSearchInd[i]);
+                pointCloud.push_back
+            }
+        }
+
+        for(int i=0; i<pointSearchIndLocal.size(); i++)
+        {
+            auto it = find(pointSearchInd.begin(), pointSearchInd.end(), pointSearchIndLocal[i]);
+
+            if( it == pointSearchInd.end())
+            {
+                pointSearchIndLocal.erase(pointSearchInd.begin() + i);
+            }
+        }
+
+        for(int i=0; i<pointSearchIndLocal.size(); i++)
+        {
+            (*point_cloud) += (*getCloud(pointSearchIndLocal[i]));
+        }
+
+        return point_cloud;
     }
 
     // Convert and process image
-    void callback(const sensor_msgs::PointCloud2ConstPtr &msg)
-    {
-        pcl::fromROSMsg(*msg, *point_cloud);
-    }
+    // void callback(const sensor_msgs::PointCloud2ConstPtr &msg)
+    // {
+    //     pcl::fromROSMsg(*msg, *point_cloud);
+    // }
 };
 
 class TrackingConverter
@@ -361,7 +444,6 @@ int main(int argc, char **argv)
         Ptr<StereoBM> bm = StereoBM::create(16,9);
         bm->compute(ic->cv_ptr_left->image.clone(),ic->cv_ptr_right->image.clone(),ic->depth_image);
 
-        pcl::PointCloud<pcl::PointXYZI>::ConstPtr pointcloud = pcc.point_cloud;
         double yaw = 0.0;
         double pitch = 0.0;
         double roll = 0.0;
@@ -370,6 +452,8 @@ int main(int argc, char **argv)
         double tz = initial_tksi.transform.translation.z;
 
         tf::Matrix3x3(tf::Quaternion(initial_tksi.transform.rotation.x, initial_tksi.transform.rotation.y, initial_tksi.transform.rotation.z, initial_tksi.transform.rotation.w)).getRPY(roll, pitch, yaw);
+
+        pcl::PointCloud<pcl::PointXYZI>::ConstPtr pointcloud = pcc.getlocalCloud(roll, pitch, yaw, tx, ty, tz);
 
         Problem problem;
 
