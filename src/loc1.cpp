@@ -2,6 +2,7 @@
 #include <math.h>
 #include <ros/ros.h>
 #include <tf/transform_listener.h>
+#include<tf/tf.h>
 #include <tf/transform_broadcaster.h>
 #include "tf/transform_datatypes.h"
 #include "tf_conversions/tf_eigen.h"
@@ -27,6 +28,11 @@
 #include "Eigen/Geometry"
 #include <eigen3/Eigen/Dense>
 #include <sstream>
+#include <vector>
+// #include "nanoflann.hpp"
+#include <boost/format.hpp>
+
+#include "nanoflann_pcl.h"
 
 #define fx 20.0
 #define fy 20.0
@@ -48,6 +54,8 @@ using ceres::Solve;
 using ceres::Solver;
 
 using namespace cv;
+using namespace std;
+// using namespace nanoflann;
 
 static const std::string OPENCV_WINDOW = "Depth Image";
 
@@ -122,6 +130,7 @@ class PointCloudConverter
     //ros::NodeHandle it_;
 
 public:
+
     nanoflann::KdTreeFLANN<pcl::PointXYZI> kdtree_local;
 
     vector<int> pointSearchIndLocal;
@@ -177,7 +186,7 @@ public:
         vector<int> pointSearchInd;
         vector<float> pointSearchSqDis;
 
-        kdtreeSurroundingKeyPoses.radiusSearch(
+        kdtree_local.radiusSearch(
         currentRobotPosPoint, (double)_surrounding_keyframe_search_radius,
         pointSearchInd, pointSearchSqDis);
 
@@ -188,7 +197,7 @@ public:
             if( it == pointSearchIndLocal.end())
             {
                 pointSearchIndLocal.push_back(pointSearchInd[i]);
-                pointCloud.push_back
+                // pointCloud.push_back;
             }
         }
 
@@ -199,6 +208,7 @@ public:
             if( it == pointSearchInd.end())
             {
                 pointSearchIndLocal.erase(pointSearchInd.begin() + i);
+                i--;
             }
         }
 
@@ -228,6 +238,9 @@ public:
     tf2_ros::TransformListener *tfListener;//(tfBuffer);
     //Eigen::Affine3d tksi;
     geometry_msgs::TransformStamped transformStamped;
+    geometry_msgs::TransformStamped transformStampedPrev,tkshiTransform;
+    tf::StampedTransform tfStamped,tfStampedPrev;
+    bool firstFrameReceived=false;
 
     TrackingConverter(ros::NodeHandle nh_) : node_(nh_)
     {
@@ -241,7 +254,20 @@ public:
         //geometry_msgs::TransformStamped transformStamped;
         try
         {
-            transformStamped = tfBuffer.lookupTransform("target_frame", "source_frame", ros::Time(0));
+            if(firstFrameReceived){
+                transformStampedPrev=transformStamped;
+            }
+            transformStamped = tfBuffer.lookupTransform("camera", "world", ros::Time(0));
+            if(firstFrameReceived){
+                tf::transformStampedMsgToTF(transformStamped,tfStamped);
+                tf::transformStampedMsgToTF(transformStampedPrev,tfStampedPrev);
+
+                tf::Transform tfStampedPrevInv=tfStampedPrev.inverse();
+                tfStamped.mult(tfStamped,tfStampedPrevInv);
+                tf::transformStampedTFToMsg(tfStamped,transformStamped);
+                
+            }
+            firstFrameReceived=true;
             //tksi = tf2::transformToEigen(transformStamped);
 
             return true;
@@ -254,7 +280,6 @@ public:
 
             return false;
         }
-
         // Convert transformStamped to Eigen
         // tksi = tf2::transformToEigen(transformStamped);
 
@@ -419,7 +444,7 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nh_;
     
-    PointCloudConverter pcc(nh_);
+    PointCloudConverter pcc;
     ic = new ImageConverter(nh_);
     TrackingConverter tc(nh_);
 

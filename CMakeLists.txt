@@ -17,6 +17,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   nav_msgs
   tf2
+  tf
   tf2_ros
   cv_bridge
   #cmake_modules
