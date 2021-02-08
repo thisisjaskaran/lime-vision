@@ -454,6 +454,10 @@ int main(int argc, char **argv)
 
     while(ros::ok())
     {
+        
+        ros::spinOnce();
+        rate.sleep();
+
         if(!tc.startTrackingConverter())
             continue;
         
@@ -506,8 +510,6 @@ int main(int argc, char **argv)
         tf::StampedTransform finalStampedTransform=tf::StampedTransform(finalTransform,ic->timeStamp,"/map","/car");
         tfBroadcaster.sendTransform(finalStampedTransform);
 
-        ros::spinOnce();
-        rate.sleep();
     }
 
     return 0;
